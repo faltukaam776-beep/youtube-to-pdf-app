@@ -67,13 +67,11 @@ if st.button("Start Processing"):
             try:
                 video_id = url.split("v=")[-1].split("&")[0]
                 
-                # 1. Transcript Logic (Independent try-except block)
+                # 1. Transcript Logic
                 if extract_transcript:
                     status_container.info("Fetching subtitle tracks...")
                     try:
                         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                        
-                        # Fallback logic: Try English first, if not available, grab the first available language (e.g., Hindi auto-generated)
                         try:
                             transcript = transcript_list.find_transcript(['en'])
                         except:
@@ -93,11 +91,10 @@ if st.button("Start Processing"):
                             with open(tmp_text.name, "rb") as f:
                                 st.session_state['text_pdf'] = io.BytesIO(f.read())
                             os.remove(tmp_text.name)
-                    except Exception as e:
-                        # Graceful skip if no transcript exists at all
-                        st.warning(f"Transcript not available for this video. Skipping transcript extraction.")
+                    except Exception:
+                        st.warning("Transcript not available for this video. Skipping transcript extraction.")
 
-                # 2. Screenshot Logic (Independent try-except block)
+                # 2. Screenshot Logic
                 if extract_screenshots:
                     status_container.info(f"Downloading video at {quality_option}...")
                     height = quality_map[quality_option]
@@ -105,7 +102,6 @@ if st.button("Start Processing"):
                     with tempfile.TemporaryDirectory() as temp_dir:
                         temp_video = os.path.join(temp_dir, "video.mp4")
                         
-                        # FIXED Error 2: Removed custom headers (they cause TLS mismatch) and set client to tv/web
                         ydl_opts = {
                             'format': f'bestvideo[height<={height}][ext=mp4]/best[height<={height}]/best',
                             'outtmpl': temp_video,
@@ -114,41 +110,49 @@ if st.button("Start Processing"):
                             'extractor_args': {'youtube': {'player_client': ['tv', 'web']}}
                         }
                         
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([url])
-                        
-                        status_container.info(f"Capturing frames every {screenshot_interval}s...")
-                        cap = cv2.VideoCapture(temp_video)
-                        fps = cap.get(cv2.CAP_PROP_FPS)
-                        
-                        if fps == 0:
-                            raise ValueError("Could not determine video FPS. Download may have failed.")
+                        try:
+                            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                ydl.download([url])
+                                
+                            status_container.info(f"Capturing frames every {screenshot_interval}s...")
+                            cap = cv2.VideoCapture(temp_video)
+                            fps = cap.get(cv2.CAP_PROP_FPS)
                             
-                        frame_interval_frames = int(fps * screenshot_interval)
-                        
-                        frames = []
-                        count = 0
-                        while cap.isOpened():
-                            ret, frame = cap.read()
-                            if not ret:
-                                break
-                            if count % frame_interval_frames == 0:
-                                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                                frames.append(img)
-                            count += 1
-                        cap.release()
-                        
-                        if frames:
-                            pdf_bytes_io = io.BytesIO()
-                            frames[0].save(
-                                pdf_bytes_io, 
-                                format='PDF', 
-                                save_all=True, 
-                                append_images=frames[1:]
-                            )
-                            st.session_state['image_pdf'] = io.BytesIO(pdf_bytes_io.getvalue())
-                        else:
-                            st.warning("No frames extracted.")
+                            if fps == 0:
+                                raise ValueError("Could not determine video FPS. Download may have failed.")
+                                
+                            frame_interval_frames = int(fps * screenshot_interval)
+                            
+                            frames = []
+                            count = 0
+                            while cap.isOpened():
+                                ret, frame = cap.read()
+                                if not ret:
+                                    break
+                                if count % frame_interval_frames == 0:
+                                    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                                    frames.append(img)
+                                count += 1
+                            cap.release()
+                            
+                            if frames:
+                                pdf_bytes_io = io.BytesIO()
+                                frames[0].save(
+                                    pdf_bytes_io, 
+                                    format='PDF', 
+                                    save_all=True, 
+                                    append_images=frames[1:]
+                                )
+                                st.session_state['image_pdf'] = io.BytesIO(pdf_bytes_io.getvalue())
+                            else:
+                                st.warning("No frames extracted.")
+                                
+                        except yt_dlp.utils.DownloadError as e:
+                            error_msg = str(e)
+                            if "DRM" in error_msg:
+                                st.warning(f"Video download blocked by YouTube (DRM/Datacenter Block). Visual extraction skipped.")
+                            else:
+                                raise e # Re-raise if it's a different download error
 
                 status_container.success("Processing complete! PDFs are ready for download.")
                 
