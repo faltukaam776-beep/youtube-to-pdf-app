@@ -24,7 +24,6 @@ with st.sidebar:
         step=1
     )
     
-    # Updated Quality Options
     quality_map = {
         "360p": 360,
         "480p": 480,
@@ -35,7 +34,7 @@ with st.sidebar:
     quality_option = st.selectbox(
         "Video Quality",
         options=list(quality_map.keys()),
-        index=2  # Defaults to 720p
+        index=2
     )
 
 # --- Main Content ---
@@ -49,7 +48,7 @@ urls_input = st.text_area(
 
 col1, col2 = st.columns(2)
 with col1:
-    extract_transcript = st.checkbox("Extract Transcript", value=False)
+    extract_transcript = st.checkbox("Extract Transcript", value=True)
 with col2:
     extract_screenshots = st.checkbox("Extract Screenshots", value=True)
 
@@ -71,7 +70,8 @@ if st.button("Start Processing"):
                 # 1. Transcript Logic
                 if extract_transcript:
                     status_container.info("Fetching subtitle tracks...")
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                    # FIXED Error 2: youtube-transcript-api v1.0.0+ uses .fetch() instead of .get_transcript()
+                    transcript_list = YouTubeTranscriptApi().fetch(video_id)
                     text_content = " ".join([t['text'] for t in transcript_list])
                     
                     pdf = FPDF()
@@ -94,16 +94,20 @@ if st.button("Start Processing"):
                     with tempfile.TemporaryDirectory() as temp_dir:
                         temp_video = os.path.join(temp_dir, "video.mp4")
                         
-                        # Added 403 Forbidden Workarounds (extractor_args & headers)
+                        # FIXED Error 1: Enhanced 403 bypass with ios client and aggressive headers
+                        # Note: If 403 persists, run `pip install -U --pre yt-dlp` in your terminal to get the nightly build
                         ydl_opts = {
                             'format': f'bestvideo[height<={height}][ext=mp4]/best[height<={height}]/best',
                             'outtmpl': temp_video,
                             'quiet': True,
                             'noplaylist': True,
-                            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
                             'http_headers': {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            }
+                                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                                'Accept-Language': 'en-US,en;q=0.5',
+                            },
+                            'nocheckcertificate': True
                         }
                         
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
