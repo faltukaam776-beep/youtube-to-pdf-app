@@ -23,10 +23,19 @@ with st.sidebar:
         value=40,
         step=1
     )
+    
+    # Updated Quality Options
+    quality_map = {
+        "360p": 360,
+        "480p": 480,
+        "720p": 720,
+        "1080p": 1080,
+        "4k": 2160
+    }
     quality_option = st.selectbox(
         "Video Quality",
-        options=["144p", "240p", "360p", "480p", "720p"],
-        index=2
+        options=list(quality_map.keys()),
+        index=2  # Defaults to 720p
     )
 
 # --- Main Content ---
@@ -40,7 +49,7 @@ urls_input = st.text_area(
 
 col1, col2 = st.columns(2)
 with col1:
-    extract_transcript = st.checkbox("Extract Transcript", value=True)
+    extract_transcript = st.checkbox("Extract Transcript", value=False)
 with col2:
     extract_screenshots = st.checkbox("Extract Screenshots", value=True)
 
@@ -57,7 +66,6 @@ if st.button("Start Processing"):
         for url in urls:
             status_container.info(f"Processing: {url}")
             try:
-                # Extract Video ID
                 video_id = url.split("v=")[-1].split("&")[0]
                 
                 # 1. Transcript Logic
@@ -72,7 +80,6 @@ if st.button("Start Processing"):
                     clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
                     pdf.multi_cell(0, 10, clean_text)
                     
-                    # Save to temp file and read bytes for Streamlit
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_text:
                         pdf.output(tmp_text.name)
                         with open(tmp_text.name, "rb") as f:
@@ -82,15 +89,21 @@ if st.button("Start Processing"):
                 # 2. Screenshot Logic
                 if extract_screenshots:
                     status_container.info(f"Downloading video at {quality_option}...")
-                    height = quality_option.replace("p", "")
+                    height = quality_map[quality_option]
                     
                     with tempfile.TemporaryDirectory() as temp_dir:
                         temp_video = os.path.join(temp_dir, "video.mp4")
+                        
+                        # Added 403 Forbidden Workarounds (extractor_args & headers)
                         ydl_opts = {
-                            'format': f'best[height<={height}][ext=mp4]/bestvideo[height<={height}]+bestaudio/best',
+                            'format': f'bestvideo[height<={height}][ext=mp4]/best[height<={height}]/best',
                             'outtmpl': temp_video,
                             'quiet': True,
-                            'noplaylist': True
+                            'noplaylist': True,
+                            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                            'http_headers': {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            }
                         }
                         
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -99,6 +112,10 @@ if st.button("Start Processing"):
                         status_container.info(f"Capturing frames every {screenshot_interval}s...")
                         cap = cv2.VideoCapture(temp_video)
                         fps = cap.get(cv2.CAP_PROP_FPS)
+                        
+                        if fps == 0:
+                            raise ValueError("Could not determine video FPS. Download may have failed.")
+                            
                         frame_interval_frames = int(fps * screenshot_interval)
                         
                         frames = []
