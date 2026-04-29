@@ -1,8 +1,14 @@
 import streamlit as st
 import io
-import time
+import os
+import tempfile
+import yt_dlp
+import cv2
+from PIL import Image
+from fpdf import FPDF
+from youtube_transcript_api import YouTubeTranscriptApi
 
-# Initialize Session State for persistent downloads across reruns
+# Initialize Session State
 if 'text_pdf' not in st.session_state:
     st.session_state['text_pdf'] = None
 if 'image_pdf' not in st.session_state:
@@ -17,25 +23,27 @@ with st.sidebar:
         value=40,
         step=1
     )
+    quality_option = st.selectbox(
+        "Video Quality",
+        options=["144p", "240p", "360p", "480p", "720p"],
+        index=2
+    )
 
 # --- Main Content ---
 st.title("🎥 YouTube to PDF Converter (Pro)")
 
-# Input Area
 urls_input = st.text_area(
     "Enter YouTube URLs (one per line):",
     value="https://www.youtube.com/watch?v=4ZwZwE8wwyM",
     height=100
 )
 
-# Extraction Options
 col1, col2 = st.columns(2)
 with col1:
     extract_transcript = st.checkbox("Extract Transcript", value=True)
 with col2:
     extract_screenshots = st.checkbox("Extract Screenshots", value=True)
 
-# Processing Execution
 if st.button("Start Processing"):
     urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
     
@@ -44,38 +52,83 @@ if st.button("Start Processing"):
     elif not extract_transcript and not extract_screenshots:
         st.error("Please select at least one extraction method.")
     else:
-        # Status Label System for explicit error/status display
         status_container = st.empty()
-        status_container.info("Initializing processor...")
         
-        try:
-            # --- Integration Hooks for Core Logic ---
-            # TODO: Add yt-dlp metadata extraction here
-            
-            if extract_transcript:
-                status_container.info("Fetching subtitle tracks (youtube-transcript-api)...")
-                # TODO: Iterate manual/auto-generated transcripts, compile with fpdf (latin-1)
-                time.sleep(1) # Simulated delay
+        for url in urls:
+            status_container.info(f"Processing: {url}")
+            try:
+                # Extract Video ID
+                video_id = url.split("v=")[-1].split("&")[0]
                 
-                # Store as BytesIO in session_state
-                st.session_state['text_pdf'] = io.BytesIO(b"%PDF-1.4 Mock Text PDF")
+                # 1. Transcript Logic
+                if extract_transcript:
+                    status_container.info("Fetching subtitle tracks...")
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                    text_content = " ".join([t['text'] for t in transcript_list])
+                    
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", size=12)
+                    clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
+                    pdf.multi_cell(0, 10, clean_text)
+                    
+                    # Save to temp file and read bytes for Streamlit
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_text:
+                        pdf.output(tmp_text.name)
+                        with open(tmp_text.name, "rb") as f:
+                            st.session_state['text_pdf'] = io.BytesIO(f.read())
+                        os.remove(tmp_text.name)
+
+                # 2. Screenshot Logic
+                if extract_screenshots:
+                    status_container.info(f"Downloading video at {quality_option}...")
+                    height = quality_option.replace("p", "")
+                    
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        temp_video = os.path.join(temp_dir, "video.mp4")
+                        ydl_opts = {
+                            'format': f'best[height<={height}][ext=mp4]/bestvideo[height<={height}]+bestaudio/best',
+                            'outtmpl': temp_video,
+                            'quiet': True,
+                            'noplaylist': True
+                        }
+                        
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([url])
+                        
+                        status_container.info(f"Capturing frames every {screenshot_interval}s...")
+                        cap = cv2.VideoCapture(temp_video)
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        frame_interval_frames = int(fps * screenshot_interval)
+                        
+                        frames = []
+                        count = 0
+                        while cap.isOpened():
+                            ret, frame = cap.read()
+                            if not ret:
+                                break
+                            if count % frame_interval_frames == 0:
+                                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                                frames.append(img)
+                            count += 1
+                        cap.release()
+                        
+                        if frames:
+                            pdf_bytes_io = io.BytesIO()
+                            frames[0].save(
+                                pdf_bytes_io, 
+                                format='PDF', 
+                                save_all=True, 
+                                append_images=frames[1:]
+                            )
+                            st.session_state['image_pdf'] = io.BytesIO(pdf_bytes_io.getvalue())
+                        else:
+                            st.warning("No frames extracted.")
+
+                status_container.success("Processing complete! PDFs are ready for download.")
                 
-            if extract_screenshots:
-                status_container.info(f"Capturing frames every {screenshot_interval}s via OpenCV...")
-                # TODO: Download low-quality .mp4 temp file, cv2 interval capture, PIL RGB conversion
-                time.sleep(1) # Simulated delay
-                
-                # Store as BytesIO in session_state
-                st.session_state['image_pdf'] = io.BytesIO(b"%PDF-1.4 Mock Image PDF")
-                
-            status_container.success("Processing complete! PDFs are ready for download.")
-            
-        except Exception as e:
-            # Catch and display specific errors (e.g., Subtitles Disabled)
-            status_container.error(f"Error: {str(e)}")
-        finally:
-            # TODO: Implement automatic cleanup of temporary .mp4 files here
-            pass
+            except Exception as e:
+                status_container.error(f"Error processing {url}: {str(e)}")
 
 # --- Persistent Download Buttons ---
 if st.session_state['text_pdf'] or st.session_state['image_pdf']:
