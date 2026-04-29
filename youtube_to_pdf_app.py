@@ -67,26 +67,37 @@ if st.button("Start Processing"):
             try:
                 video_id = url.split("v=")[-1].split("&")[0]
                 
-                # 1. Transcript Logic
+                # 1. Transcript Logic (Independent try-except block)
                 if extract_transcript:
                     status_container.info("Fetching subtitle tracks...")
-                    # FIXED Error 2: youtube-transcript-api v1.0.0+ uses .fetch() instead of .get_transcript()
-                    transcript_list = YouTubeTranscriptApi().fetch(video_id)
-                    text_content = " ".join([t['text'] for t in transcript_list])
-                    
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_font("Arial", size=12)
-                    clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
-                    pdf.multi_cell(0, 10, clean_text)
-                    
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_text:
-                        pdf.output(tmp_text.name)
-                        with open(tmp_text.name, "rb") as f:
-                            st.session_state['text_pdf'] = io.BytesIO(f.read())
-                        os.remove(tmp_text.name)
+                    try:
+                        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                        
+                        # Fallback logic: Try English first, if not available, grab the first available language (e.g., Hindi auto-generated)
+                        try:
+                            transcript = transcript_list.find_transcript(['en'])
+                        except:
+                            transcript = list(transcript_list)[0]
 
-                # 2. Screenshot Logic
+                        transcript_data = transcript.fetch()
+                        text_content = " ".join([t['text'] for t in transcript_data])
+                        
+                        pdf = FPDF()
+                        pdf.add_page()
+                        pdf.set_font("Arial", size=12)
+                        clean_text = text_content.encode('latin-1', 'replace').decode('latin-1')
+                        pdf.multi_cell(0, 10, clean_text)
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_text:
+                            pdf.output(tmp_text.name)
+                            with open(tmp_text.name, "rb") as f:
+                                st.session_state['text_pdf'] = io.BytesIO(f.read())
+                            os.remove(tmp_text.name)
+                    except Exception as e:
+                        # Graceful skip if no transcript exists at all
+                        st.warning(f"Transcript not available for this video. Skipping transcript extraction.")
+
+                # 2. Screenshot Logic (Independent try-except block)
                 if extract_screenshots:
                     status_container.info(f"Downloading video at {quality_option}...")
                     height = quality_map[quality_option]
@@ -94,20 +105,13 @@ if st.button("Start Processing"):
                     with tempfile.TemporaryDirectory() as temp_dir:
                         temp_video = os.path.join(temp_dir, "video.mp4")
                         
-                        # FIXED Error 1: Enhanced 403 bypass with ios client and aggressive headers
-                        # Note: If 403 persists, run `pip install -U --pre yt-dlp` in your terminal to get the nightly build
+                        # FIXED Error 2: Removed custom headers (they cause TLS mismatch) and set client to tv/web
                         ydl_opts = {
                             'format': f'bestvideo[height<={height}][ext=mp4]/best[height<={height}]/best',
                             'outtmpl': temp_video,
                             'quiet': True,
                             'noplaylist': True,
-                            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
-                            'http_headers': {
-                                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                                'Accept-Language': 'en-US,en;q=0.5',
-                            },
-                            'nocheckcertificate': True
+                            'extractor_args': {'youtube': {'player_client': ['tv', 'web']}}
                         }
                         
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
